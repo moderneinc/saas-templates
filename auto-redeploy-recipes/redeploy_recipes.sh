@@ -10,7 +10,8 @@
 # and user marketplaces are intentionally not touched.
 #
 # Required environment variables:
-#   MODERNE_TENANT_URL   Base URL of the tenant, e.g. https://app.moderne.io
+#   MODERNE_TENANT_URL   Tenant API gateway URL, e.g. https://api.<tenant>.moderne.io
+#                        (the api. host, not the web UI host)
 #   MODERNE_API_TOKEN    Personal access token (admin role required).
 #
 # Optional environment variables:
@@ -47,6 +48,11 @@ graphql() {
         echo "HTTP error from $ENDPOINT: $resp" >&2
         return 1
     }
+    if ! printf '%s' "$resp" | jq empty >/dev/null 2>&1; then
+        echo "error: $ENDPOINT did not return JSON. Make sure MODERNE_TENANT_URL points at" >&2
+        echo "       the API gateway (e.g. https://api.<tenant>.moderne.io), not the web UI." >&2
+        return 1
+    fi
     if echo "$resp" | jq -e '.errors' >/dev/null; then
         echo "GraphQL errors: $(echo "$resp" | jq -c '.errors')" >&2
         return 1
@@ -179,7 +185,11 @@ poll_install() {
 }
 
 echo "Fetching universal-scoped installations from $ENDPOINT..."
-mapfile -t BUNDLES < <(collect_bundles)
+# Portable array population (mapfile/readarray is bash 4+; macOS ships bash 3.2).
+BUNDLES=()
+while IFS= read -r line; do
+    [[ -n "$line" ]] && BUNDLES+=("$line")
+done < <(collect_bundles)
 if [[ ${#BUNDLES[@]} -eq 0 ]]; then
     echo "No universal bundles found. Nothing to do."
     exit 0

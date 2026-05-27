@@ -39,7 +39,7 @@ version each night - harmless but a no-op.
 
 ## Requirements
 
-- Bash 4+
+- Bash 3.2+ (works with the default macOS `/bin/bash`)
 - `curl` and `jq` on `PATH`
 - A Moderne personal access token with the `admin` role
 
@@ -47,10 +47,10 @@ version each night - harmless but a no-op.
 
 All configuration is via environment variables.
 
-| Variable             | Required | Default | Notes                                                                 |
-| -------------------- | -------- | ------- | --------------------------------------------------------------------- |
-| `MODERNE_TENANT_URL` | yes      |         | Base URL of the tenant, e.g. `https://app.moderne.io`.                |
-| `MODERNE_API_TOKEN`  | yes      |         | Personal access token (`mat-...`) with admin role.                    |
+| Variable             | Required | Default | Notes                                                                            |
+| -------------------- | -------- | ------- | -------------------------------------------------------------------------------- |
+| `MODERNE_TENANT_URL` | yes      |         | The tenant **API gateway** URL, e.g. `https://api.<tenant>.moderne.io`. Must be the `api.` host, not the web UI (`https://<tenant>.moderne.io`), which serves HTML and will fail. |
+| `MODERNE_API_TOKEN`  | yes      |         | Personal access token (`mat-...`) with admin role.                               |
 | `POLL_TIMEOUT_S`     | no       | `600`   | Per-install timeout, in seconds.                                      |
 | `POLL_INTERVAL_S`    | no       | `5`     | Seconds between status polls.                                         |
 | `DRY_RUN`            | no       | unset   | When `1`, prints what would be redeployed and exits without mutating. |
@@ -58,7 +58,7 @@ All configuration is via environment variables.
 ## Quick start
 
 ```sh
-export MODERNE_TENANT_URL=https://app.moderne.io
+export MODERNE_TENANT_URL=https://api.app.moderne.io
 export MODERNE_API_TOKEN=mat-...
 ./redeploy_recipes.sh
 ```
@@ -75,7 +75,7 @@ DRY_RUN=1 ./redeploy_recipes.sh
 
 ```cron
 # Re-resolve universal recipe bundles every night at 02:30
-30 2 * * *  MODERNE_TENANT_URL=https://app.moderne.io MODERNE_API_TOKEN=mat-... /opt/moderne/redeploy_recipes.sh >> /var/log/moderne-redeploy.log 2>&1
+30 2 * * *  MODERNE_TENANT_URL=https://api.app.moderne.io MODERNE_API_TOKEN=mat-... /opt/moderne/redeploy_recipes.sh >> /var/log/moderne-redeploy.log 2>&1
 ```
 
 ### GitHub Actions
@@ -94,7 +94,7 @@ jobs:
       - uses: actions/checkout@v4
       - run: ./redeploy_recipes.sh
         env:
-          MODERNE_TENANT_URL: https://app.moderne.io
+          MODERNE_TENANT_URL: https://api.app.moderne.io
           MODERNE_API_TOKEN: ${{ secrets.MODERNE_API_TOKEN }}
 ```
 

@@ -1,4 +1,4 @@
-# auto-redeploy-saas-recipes
+# Moderne Recipe Redeploy
 
 A small Bash script that re-installs every recipe bundle currently registered
 in a Moderne SaaS tenant's **universal marketplace**. Run it on a nightly
@@ -47,26 +47,26 @@ version each night - harmless but a no-op.
 
 All configuration is via environment variables.
 
-| Variable             | Required | Default | Notes                                                                            |
-| -------------------- | -------- | ------- | -------------------------------------------------------------------------------- |
-| `MODERNE_TENANT_URL` | yes      |         | The tenant **API gateway** URL, e.g. `https://api.<tenant>.moderne.io`. Must be the `api.` host, not the web UI (`https://<tenant>.moderne.io`), which serves HTML and will fail. |
-| `MODERNE_API_TOKEN`  | yes      |         | Personal access token (`mat-...`) with admin role.                               |
-| `POLL_TIMEOUT_S`     | no       | `600`   | Per-install timeout, in seconds.                                      |
-| `POLL_INTERVAL_S`    | no       | `5`     | Seconds between status polls.                                         |
-| `DRY_RUN`            | no       | unset   | When `1`, prints what would be redeployed and exits without mutating. |
+| Variable                 | Required | Default | Notes                                                                            |
+| ------------------------ | -------- | ------- | -------------------------------------------------------------------------------- |
+| `MODERNE_TENANT_API_URL` | yes      |         | The tenant **API gateway** URL, e.g. `https://api.<tenant>.moderne.io`. Must be the `api.` host, not the web UI (`https://<tenant>.moderne.io`), which serves HTML and will fail. |
+| `MODERNE_PAT`            | yes      |         | Moderne Personal Access Token with admin scope.                                  |
+| `POLL_TIMEOUT`           | no       | `600`   | Per-install timeout, in seconds.                                                 |
+| `POLL_INTERVAL`          | no       | `5`     | Seconds between status polls.                                                    |
+| `DRY_RUN`                | no       | unset   | When `1`, prints what would be redeployed and exits without mutating.            |
 
 ## Quick start
 
 ```sh
-export MODERNE_TENANT_URL=https://api.app.moderne.io
-export MODERNE_API_TOKEN=mat-...
-./redeploy_recipes.sh
+export MODERNE_TENANT_API_URL=https://api.app.moderne.io
+export MODERNE_PAT=mat-...
+./redeploy-recipes.sh
 ```
 
 Dry run first to see the bundles that would be touched:
 
 ```sh
-DRY_RUN=1 ./redeploy_recipes.sh
+DRY_RUN=1 ./redeploy-recipes.sh
 ```
 
 ## Scheduling nightly
@@ -75,7 +75,7 @@ DRY_RUN=1 ./redeploy_recipes.sh
 
 ```cron
 # Re-resolve universal recipe bundles every night at 02:30
-30 2 * * *  MODERNE_TENANT_URL=https://api.app.moderne.io MODERNE_API_TOKEN=mat-... /opt/moderne/redeploy_recipes.sh >> /var/log/moderne-redeploy.log 2>&1
+30 2 * * *  MODERNE_TENANT_API_URL=https://api.app.moderne.io MODERNE_PAT=mat-... /opt/moderne/redeploy-recipes.sh >> /var/log/moderne-redeploy.log 2>&1
 ```
 
 ### GitHub Actions
@@ -92,10 +92,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: ./redeploy_recipes.sh
+      - run: ./redeploy-recipes.sh
         env:
-          MODERNE_TENANT_URL: https://api.app.moderne.io
-          MODERNE_API_TOKEN: ${{ secrets.MODERNE_API_TOKEN }}
+          MODERNE_TENANT_API_URL: https://api.app.moderne.io
+          MODERNE_PAT: ${{ secrets.MODERNE_PAT }}
 ```
 
 ## Exit codes

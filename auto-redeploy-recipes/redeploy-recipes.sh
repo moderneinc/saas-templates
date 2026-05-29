@@ -205,11 +205,21 @@ poll_install() {
 
 log "Fetching universal-scoped installations from ${GRAPHQL_URL}…"
 
+# Capture collect_bundles' output to a variable first.  A process-substitution
+# `done < <(collect_bundles)` would let a fetch failure (API down, bad token,
+# non-JSON response) close the pipe with no output, leaving BUNDLES empty and
+# the script silently exiting 0 with "Nothing to do" — invisible to a cron.
+# Assigning from $() under `set -e` propagates the failure so we can fail loud.
+BUNDLES_JSON=$(collect_bundles) || {
+  log "ERROR: failed to fetch installations from ${GRAPHQL_URL}"
+  exit 1
+}
+
 # Portable array population (mapfile/readarray is bash 4+; macOS ships bash 3.2).
 BUNDLES=()
 while IFS= read -r line; do
   [[ -n "$line" ]] && BUNDLES+=("$line")
-done < <(collect_bundles)
+done <<<"$BUNDLES_JSON"
 
 if [[ ${#BUNDLES[@]} -eq 0 ]]; then
   log "No universal bundles found. Nothing to do."

@@ -11,8 +11,11 @@ Organization and user marketplaces are intentionally not touched.
 
 ## How it works
 
-1. Calls `query { organization(id: "ALL") { marketplace { installations(...) } } }`
+1. Calls `query { organization(id: "ε") { marketplace { installations(...) } } }`
    on the tenant's GraphQL API (`/graphql`) and pages through the results.
+   `ε` (epsilon) is the synthetic global-root org id (the UI's
+   `GLOBAL_ORGANIZATION_ID`); using it avoids depending on any particular
+   org being named in the tenant's tree.
 2. Filters edges to `UniversalInstallScope` only.
 3. For each bundle, fires `installRecipesUniversal(bundle: ...)` using the
    bundle's originally `requestedVersion`, then polls the install until it

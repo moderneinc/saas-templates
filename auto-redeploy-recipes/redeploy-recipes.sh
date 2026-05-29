@@ -75,13 +75,14 @@ done
 
 # ── GraphQL operations ───────────────────────────────────────────────────────
 #
-# Marketplace lookups go through Organization.marketplace; "ALL" is the root
-# org id (the universal entry point).  The resolver merges universal + org-chain
-# + user installs into one list with each edge tagged by scope, so we filter to
-# UniversalInstallScope client-side.
+# Marketplace lookups go through Organization.marketplace; "ε" (epsilon) is the
+# synthetic global-root org id used by the UI's GLOBAL_ORGANIZATION_ID, present
+# on every tenant regardless of how the customer's org tree is configured.  The
+# resolver merges universal + org-chain + user installs into one list with each
+# edge tagged by scope, so we filter to UniversalInstallScope client-side.
 
 LIST_INSTALLATIONS_QUERY='query ListInstallations($first: Int!, $after: String) {
-  organization(id: "ALL") {
+  organization(id: "ε") {
     marketplace {
       installations(first: $first, after: $after) {
         pageInfo { hasNextPage endCursor }
@@ -110,7 +111,7 @@ INSTALL_MUTATION='mutation Install($bundle: RecipeBundleInput!) {
 }'
 
 POLL_INSTALLATION_QUERY='query PollInstallation($id: ID!) {
-  organization(id: "ALL") {
+  organization(id: "ε") {
     marketplace {
       installations(first: 1, where: { id: { _eq: $id } }) {
         edges {

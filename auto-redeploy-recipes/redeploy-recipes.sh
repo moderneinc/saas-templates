@@ -36,6 +36,11 @@ log() { echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*"; }
 
 # Send a GraphQL operation (query string + variables JSON) and print .data.
 # Returns non-zero on transport errors, non-JSON responses, or GraphQL errors.
+#
+# The X-Moderne-Platform-Version: v2 header routes the request to the v2 platform
+# on tenants mid-migration, where api.<tenant>.moderne.io still resolves to the v1
+# front door. It's required to authenticate with a v2 token and is a harmless
+# no-op on tenants that are fully on v1 or fully cut over to v2.
 graphql() {
   local query="$1" variables="$2" payload resp
   payload=$(jq -n --arg q "$query" --argjson v "$variables" '{query: $q, variables: $v}')
@@ -43,6 +48,7 @@ graphql() {
     -H "Authorization: Bearer ${MODERNE_PAT}" \
     -H "Content-Type: application/json" \
     -H "Accept: application/json" \
+    -H "X-Moderne-Platform-Version: v2" \
     -d "$payload") || {
     log "ERROR: HTTP error from ${GRAPHQL_URL}: ${resp}"
     return 1

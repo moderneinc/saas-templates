@@ -32,7 +32,10 @@ set -euo pipefail
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
-log() { echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*"; }
+# Logs go to stderr so that they never contaminate the stdout of functions whose
+# output is captured with $() (graphql's .data, collect_bundles' bundle list,
+# start_install's id).  Cron redirects (>> log 2>&1) still capture them.
+log() { echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*" >&2; }
 
 # Send a GraphQL operation (query string + variables JSON) and print .data.
 # Returns non-zero on transport errors, non-JSON responses, or GraphQL errors.
@@ -178,31 +181,55 @@ collect_bundles() {
          | .[]' <<<"$all_edges"
 }
 
+# start_install BUNDLE_INPUT -> 0 on success with INSTALL_ID set to the new id.
+# On failure, returns 1 and sets FAIL_REASON to a human-readable explanation.
+# Sets INSTALL_ID via a global rather than stdout so it isn't run in a $()
+# subshell, which would discard the FAIL_REASON it sets.
 start_install() {
   local bundle_input="$1" data vars
+  INSTALL_ID=""
   vars=$(jq -n --argjson b "$bundle_input" '{bundle: $b}')
-  data=$(graphql "$INSTALL_MUTATION" "$vars") || return 1
-  echo "$data" | jq -r '.installRecipesUniversal.id'
+  if ! data=$(graphql "$INSTALL_MUTATION" "$vars"); then
+    FAIL_REASON="install request was rejected (see GraphQL/HTTP error above)"
+    return 1
+  fi
+  INSTALL_ID=$(echo "$data" | jq -r '.installRecipesUniversal.id // empty')
+  if [[ -z "$INSTALL_ID" ]]; then
+    FAIL_REASON="install request returned no id; response was: $(echo "$data" | jq -c .)"
+    return 1
+  fi
+  return 0
 }
 
 # poll_install INSTALL_ID -> 0 on FINISHED, 1 on ERROR/TIMEOUT/MISSING.
+# On failure, returns 1 and sets FAIL_REASON to a human-readable explanation
+# (always including the install id so the failure can be looked up in the UI).
 poll_install() {
   local install_id="$1" deadline state msg data
   deadline=$(( $(date +%s) + POLL_TIMEOUT ))
   while :; do
-    data=$(graphql "$POLL_INSTALLATION_QUERY" \
-      "$(jq -n --arg id "$install_id" '{id: $id}')") || return 1
+    if ! data=$(graphql "$POLL_INSTALLATION_QUERY" \
+      "$(jq -n --arg id "$install_id" '{id: $id}')"); then
+      FAIL_REASON="could not query status of install ${install_id} (see error above)"
+      return 1
+    fi
     state=$(echo "$data" | jq -r '.organization.marketplace.installations.edges[0].node.__typename // "MISSING"')
     case "$state" in
       RecipeInstallationFinished) return 0 ;;
       RecipeInstallationError)
-        msg=$(echo "$data" | jq -r '.organization.marketplace.installations.edges[0].node.message // ""')
-        log "  error: ${msg}"; return 1 ;;
+        msg=$(echo "$data" | jq -r '.organization.marketplace.installations.edges[0].node.message // "(no message returned)"')
+        FAIL_REASON="install ${install_id} failed: ${msg}"
+        log "  error: ${msg} (install ${install_id})"
+        return 1 ;;
       MISSING)
-        log "  error: install ${install_id} disappeared"; return 1 ;;
+        FAIL_REASON="install ${install_id} disappeared from the marketplace before finishing"
+        log "  error: ${FAIL_REASON}"
+        return 1 ;;
     esac
     if (( $(date +%s) >= deadline )); then
-      log "  error: still ${state} after ${POLL_TIMEOUT}s"; return 1
+      FAIL_REASON="install ${install_id} still ${state} after ${POLL_TIMEOUT}s timeout"
+      log "  error: ${FAIL_REASON}"
+      return 1
     fi
     sleep "$POLL_INTERVAL"
   done
@@ -246,20 +273,25 @@ fi
 # ── Process each bundle ──────────────────────────────────────────────────────
 
 FAILED=0
+FAILURES=()
 for b in "${BUNDLES[@]}"; do
   LABEL=$(echo "$b" | jq -r '"[\(.ecosystem)] \(.packageName) @ \(.version // "<unspecified>")"')
   BUNDLE_INPUT=$(echo "$b" | jq -c '.input')
+  FAIL_REASON=""
+  INSTALL_ID=""
 
-  if ! INSTALL_ID=$(start_install "$BUNDLE_INPUT"); then
-    log "FAIL  ${LABEL}"
+  if ! start_install "$BUNDLE_INPUT"; then
+    log "FAIL  ${LABEL}: ${FAIL_REASON}"
+    FAILURES+=("${LABEL}: ${FAIL_REASON}")
     FAILED=$(( FAILED + 1 ))
     continue
   fi
 
   if poll_install "$INSTALL_ID"; then
-    log "OK    ${LABEL}"
+    log "OK    ${LABEL} (install ${INSTALL_ID})"
   else
-    log "FAIL  ${LABEL}"
+    log "FAIL  ${LABEL}: ${FAIL_REASON}"
+    FAILURES+=("${LABEL}: ${FAIL_REASON}")
     FAILED=$(( FAILED + 1 ))
   fi
 done
@@ -267,5 +299,9 @@ done
 TOTAL=${#BUNDLES[@]}
 log "Done. $(( TOTAL - FAILED ))/${TOTAL} succeeded."
 if (( FAILED > 0 )); then
+  log "${FAILED} of ${TOTAL} bundle(s) failed to redeploy:"
+  for f in "${FAILURES[@]}"; do
+    log "  - ${f}"
+  done
   exit 1
 fi

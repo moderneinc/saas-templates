@@ -201,7 +201,9 @@ start_install() {
   return 0
 }
 
-# poll_install INSTALL_ID -> 0 on FINISHED, 1 on ERROR/TIMEOUT/MISSING.
+# poll_install INSTALL_ID -> 0 on FINISHED, 1 on ERROR or TIMEOUT. A transiently
+# MISSING install (not yet visible in the eventually-consistent listing) is polled
+# until it appears or POLL_TIMEOUT elapses, not treated as an immediate failure.
 # On failure, returns 1 and sets FAIL_REASON to a human-readable explanation
 # (always including the install id so the failure can be looked up in the UI).
 poll_install() {
@@ -221,10 +223,9 @@ poll_install() {
         FAIL_REASON="install ${install_id} failed: ${msg}"
         log "  error: ${msg} (install ${install_id})"
         return 1 ;;
-      MISSING)
-        FAIL_REASON="install ${install_id} disappeared from the marketplace before finishing"
-        log "  error: ${FAIL_REASON}"
-        return 1 ;;
+      # MISSING (no edge yet) is not terminal: the listing is eventually consistent, so a
+      # just-enqueued or just-finished install can be briefly absent. Keep polling; a still
+      # MISSING install is caught by the POLL_TIMEOUT branch below.
     esac
     if (( $(date +%s) >= deadline )); then
       FAIL_REASON="install ${install_id} still ${state} after ${POLL_TIMEOUT}s timeout"

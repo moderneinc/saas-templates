@@ -26,12 +26,12 @@ The Moderne Platform produces CSV files with the following columns:
 | Column        | Description                                                    | Example                                        |
 |---------------|----------------------------------------------------------------|------------------------------------------------|
 | `User`        | Email or identifier of the user that triggered the event       | `user@example.com`                             |
-| `Target`      | The resource category the event applies to                     | `recipes`, `recipe.runs`, `artifact.storage`   |
-| `Action type` | CRUD classification of the action                              | `Read`, `Create`, `Update`, `Delete`           |
-| `Action`      | Specific action name                                           | `GET_RECIPE`, `RUN_RECIPE`                     |
-| `Description` | Human-readable description of what happened                    | `Get a specific recipe and its details.`       |
+| `Target`      | The resource category the event applies to                     | `access.tokens`, `logins`, `scm.tokens`        |
+| `Action type` | CRUD classification of the action                              | `CREATE`, `READ`, `UPDATE`, `DELETE`           |
+| `Action`      | Specific action name                                           | `create.token`, `login`                        |
+| `Description` | Human-readable description of what happened                    | `Created access token ''`                       |
 | `Time`        | ISO 8601 timestamp of the event                                | `2026-02-16T12:00:00.123456Z`                  |
-| `Outcome`     | Result of the action                                           | `Success`, `Failed`                            |
+| `Outcome`     | Result of the action                                           | `SUCCESS`, `FAILURE`                            |
 
 ## Prerequisites
 
@@ -149,11 +149,11 @@ CSV files are named with epoch timestamps for the date range: `audit-events-<sin
 
 ## Moderne audit log API reference
 
-The Moderne Platform exposes audit logs via GraphQL at `https://api.<TENANT>.moderne.io/graphql`:
+The Moderne Platform exposes audit logs via GraphQL at `https://api.<TENANT>.moderne.io/graphql`. Every request carries the `X-Moderne-Platform-Version: v2` header, which routes to the v2 platform on tenants mid-migration (where `api.<tenant>.moderne.io` still resolves to the v1 front door) and is a harmless no-op once a tenant is fully cut over.
 
-- **Initiate download**: `mutation { downloadAuditLogs(format: CSV, since: "...", until: "...") { id state url } }`
-- **Poll status**: `query { auditLogsDownload(id: "...") { id state url } }`
-- **Download the file**: `curl -H "Authorization: Bearer $PAT" "<url>"`
+- **Initiate download**: `mutation { downloadAuditLogs(format: CSV, since: "...", until: "...") { __typename id } }` returns the `AuditLogsDownload` interface; the state is carried in `__typename` (`AuditLogsDownloadProcessing` → `AuditLogsDownloadFinished` / `AuditLogsDownloadError`).
+- **Poll status**: `query { auditLogsDownloads(first: 1, where: { id: { _eq: "..." } }) { edges { node { __typename ... on AuditLogsDownloadFinished { downloadUrl } ... on AuditLogsDownloadError { message } } } } }`
+- **Download the file**: `downloadUrl` is a path relative to the tenant API host (e.g. `/audit_logs/download/<id>`). Prepend `MODERNE_TENANT_API_URL` and fetch it: `curl -H "Authorization: Bearer $PAT" -H "X-Moderne-Platform-Version: v2" "$MODERNE_TENANT_API_URL<downloadUrl>"`
 
 The script appends `/graphql` to `MODERNE_TENANT_API_URL` to form the endpoint.
 

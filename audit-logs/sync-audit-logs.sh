@@ -13,7 +13,7 @@ set -euo pipefail
 #   User, Target, Action type, Action, Description, Time, Outcome
 #
 # Required environment variables:
-#   MODERNE_TENANT_API_URL  – e.g. https://app.moderne.io
+#   MODERNE_TENANT_API_URL  – the api. host, e.g. https://api.<tenant>.moderne.io
 #   MODERNE_PAT         – a Moderne Personal Access Token with admin scope
 #
 # Optional arguments:
@@ -81,11 +81,16 @@ to_epoch() {
   exit 1
 }
 
+# The X-Moderne-Platform-Version: v2 header routes the request to the v2 platform
+# on tenants mid-migration, where api.<tenant>.moderne.io still resolves to the v1
+# front door. It's required to authenticate with a v2 token and is a harmless
+# no-op on tenants that are fully on v1 or fully cut over to v2.
 graphql() {
   local query="$1"
   curl -sf \
     -H "Authorization: Bearer ${MODERNE_PAT}" \
     -H "Content-Type: application/json" \
+    -H "X-Moderne-Platform-Version: v2" \
     -d "$query" \
     "$GRAPHQL_URL"
 }
@@ -161,17 +166,21 @@ fi
 
 log "Requesting audit log CSV export…"
 
+# downloadAuditLogs returns the AuditLogsDownload interface; the concrete state is
+# carried in __typename (Processing → Finished → Error). The mutation may return
+# Finished immediately when a matching closed-window export already exists.
 INITIATE_PAYLOAD=$(jq -n \
   --arg since "$SINCE_ISO" \
   --arg until "$UNTIL_ISO" \
   '{
-    query: "mutation ($since: DateTime, $until: DateTime) { downloadAuditLogs(format: CSV, since: $since, until: $until) { id state stateMessage url } }",
+    query: "mutation ($since: DateTime, $until: DateTime) { downloadAuditLogs(format: CSV, since: $since, until: $until) { __typename id ... on AuditLogsDownloadFinished { downloadUrl } ... on AuditLogsDownloadError { message } } }",
     variables: { since: $since, until: $until }
   }')
 
 INITIATE_RESPONSE=$(graphql "$INITIATE_PAYLOAD")
-DOWNLOAD_ID=$(echo "$INITIATE_RESPONSE" | jq -r '.data.downloadAuditLogs.id')
-INITIAL_STATE=$(echo "$INITIATE_RESPONSE" | jq -r '.data.downloadAuditLogs.state')
+NODE=$(echo "$INITIATE_RESPONSE" | jq -c '.data.downloadAuditLogs // empty')
+DOWNLOAD_ID=$(echo "$NODE" | jq -r '.id // empty')
+STATE=$(echo "$NODE" | jq -r '.__typename // empty')
 
 if [[ -z "$DOWNLOAD_ID" || "$DOWNLOAD_ID" == "null" ]]; then
   log "ERROR: Failed to initiate audit log download."
@@ -179,40 +188,44 @@ if [[ -z "$DOWNLOAD_ID" || "$DOWNLOAD_ID" == "null" ]]; then
   exit 1
 fi
 
-log "Download initiated (id=${DOWNLOAD_ID}, state=${INITIAL_STATE})"
+log "Download initiated (id=${DOWNLOAD_ID}, state=${STATE})"
 
 # ── 3. Poll until ready ─────────────────────────────────────────────────────
 
+# Status is polled via the auditLogsDownloads connection, filtered to this id. The
+# listing is eventually consistent, so a just-created download can be briefly absent
+# (node = MISSING); that is treated as still-processing, not a failure.
 POLL_QUERY=$(jq -n \
   --arg id "$DOWNLOAD_ID" \
   '{
-    query: "query ($id: ID!) { auditLogsDownload(id: $id) { id state stateMessage url } }",
+    query: "query ($id: ID!) { auditLogsDownloads(first: 1, where: { id: { _eq: $id } }) { edges { node { __typename id ... on AuditLogsDownloadFinished { downloadUrl } ... on AuditLogsDownloadError { message } } } } }",
     variables: { id: $id }
   }')
 
-POLL_RESPONSE="$INITIATE_RESPONSE"
 ELAPSED=0
-STATE="$INITIAL_STATE"
 
-while [[ "$STATE" == "QUEUED" ]]; do
+while [[ "$STATE" != "AuditLogsDownloadFinished" && "$STATE" != "AuditLogsDownloadError" ]]; do
   if (( ELAPSED >= POLL_TIMEOUT )); then
-    log "ERROR: Timed out waiting for download after ${POLL_TIMEOUT}s"
+    log "ERROR: Timed out waiting for download after ${POLL_TIMEOUT}s (last state: ${STATE})"
     exit 1
   fi
   sleep "$POLL_INTERVAL"
   ELAPSED=$(( ELAPSED + POLL_INTERVAL ))
   POLL_RESPONSE=$(graphql "$POLL_QUERY")
-  STATE=$(echo "$POLL_RESPONSE" | jq -r '.data.auditLogsDownload.state')
+  NODE=$(echo "$POLL_RESPONSE" | jq -c '.data.auditLogsDownloads.edges[0].node // empty')
+  STATE=$(echo "$NODE" | jq -r '.__typename // "MISSING"')
   log "  … state=${STATE} (${ELAPSED}s elapsed)"
 done
 
-if [[ "$STATE" != "SUCCESSFUL" ]]; then
-  STATE_MSG=$(echo "$POLL_RESPONSE" | jq -r '.data.auditLogsDownload.stateMessage // .data.downloadAuditLogs.stateMessage // "unknown"')
+if [[ "$STATE" != "AuditLogsDownloadFinished" ]]; then
+  STATE_MSG=$(echo "$NODE" | jq -r '.message // "unknown"')
   log "ERROR: Download failed – ${STATE_MSG}"
   exit 1
 fi
 
-DOWNLOAD_URL=$(echo "$POLL_RESPONSE" | jq -r '.data.auditLogsDownload.url // .data.downloadAuditLogs.url')
+# downloadUrl is a path relative to the tenant API host (e.g. /audit_logs/download/<id>).
+DOWNLOAD_PATH=$(echo "$NODE" | jq -r '.downloadUrl')
+DOWNLOAD_URL="${MODERNE_TENANT_API_URL%/}${DOWNLOAD_PATH}"
 log "Download ready: ${DOWNLOAD_URL}"
 
 # ── 4. Download CSV to output directory ──────────────────────────────────────
@@ -223,6 +236,7 @@ CSV_FILE="${OUTPUT_DIR}/audit-events-${SINCE_EPOCH}-${UNTIL_EPOCH}.csv"
 
 curl -sf \
   -H "Authorization: Bearer ${MODERNE_PAT}" \
+  -H "X-Moderne-Platform-Version: v2" \
   -o "$CSV_FILE" \
   "$DOWNLOAD_URL"
 
